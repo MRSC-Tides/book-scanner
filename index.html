@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { 
+      width: 100%; margin: 0; padding: 16px 12px; 
+      background: #f1f5f9; 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+      text-align: center; 
+    }
+    h2 { margin: 8px 0 16px; color: #0f172a; font-size: 26px; }
+    
+    /* LIVE VIEWFINDER */
+    #reader-wrapper {
+      width: 100%; max-width: 360px; margin: 0 auto; 
+      border-radius: 12px; overflow: hidden; 
+      box-shadow: 0 4px 14px rgba(0,0,0,0.15); 
+      background: #000;
+    }
+    #reader { width: 100%; }
+
+    #status { margin: 16px 0; font-size: 19px; font-weight: bold; color: #334155; min-height: 26px; }
+
+    /* PREVIEW CARD */
+    #card { 
+      display: none; background: white; border-radius: 14px; 
+      padding: 18px; margin: 20px 0; width: 100%; 
+      box-shadow: 0 6px 18px rgba(0,0,0,0.12); text-align: left; 
+    }
+    .cover-img { width: 100px; height: 145px; object-fit: cover; border-radius: 8px; float: left; margin-right: 16px; background: #e2e8f0; }
+    .title { font-size: 21px; font-weight: bold; color: #0f172a; margin: 0 0 6px 0; line-height: 1.25; }
+    .author { font-size: 18px; color: #64748b; margin: 0 0 10px 0; }
+    .badge { display: inline-block; padding: 6px 12px; border-radius: 6px; font-size: 16px; font-weight: bold; background: #e2e8f0; color: #334155; }
+    .badge-in-stock { background: #dcfce7; color: #15803d; }
+
+    /* BUTTONS */
+    .btn-group { display: flex; gap: 8px; margin-top: 22px; clear: both; }
+    .btn-group button { flex: 1; padding: 18px 4px; border: none; border-radius: 10px; font-size: 19px; font-weight: bold; cursor: pointer; }
+    .btn-add { background: #16a34a; color: white; }
+    .btn-sell { background: #dc2626; color: white; }
+    .btn-cancel { background: #94a3b8; color: white; }
+
+    /* MANUAL ENTRY */
+    .manual-box { margin-top: 26px; display: flex; flex-direction: column; gap: 12px; width: 100%; }
+    .manual-input { width: 100%; padding: 16px; border: 2px solid #cbd5e1; border-radius: 10px; font-size: 21px; text-align: center; background: white; }
+    .btn-manual { width: 100%; background: #475569; color: white; padding: 16px; border: none; border-radius: 10px; font-size: 21px; font-weight: bold; cursor: pointer; }
+
+    /* TOAST */
+    #toast {
+      display: none; position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+      padding: 16px 20px; border-radius: 10px; font-size: 19px; font-weight: bold; color: white;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.25); z-index: 9999; width: 92%;
+    }
+    .toast-success { background: #16a34a; }
+    .toast-error { background: #dc2626; }
+  </style>
+</head>
+<body>
+
+  <div id="toast"></div>
+
+  <h2>📚 Charity Book Scanner</h2>
+
+  <!-- LIVE CAMERA VIEWFINDER -->
+  <div id="reader-wrapper">
+    <div id="reader"></div>
+  </div>
+
+  <div id="status">Starting camera...</div>
+
+  <!-- BOOK PREVIEW CARD -->
+  <div id="card">
+    <img id="book-cover" class="cover-img" src="" onerror="this.onerror=null; this.src='https://placehold.co/100x145/e2e8f0/475569?text=No+Cover';" />
+    <div class="title" id="book-title">-</div>
+    <div class="author" id="book-author">-</div>
+    <div id="book-stock" class="badge">Stock: 0</div>
+
+    <div class="btn-group">
+      <button class="btn-add" onclick="handleAdd()">+ ADD</button>
+      <button class="btn-sell" onclick="handleSell()">- SELL</button>
+      <button class="btn-cancel" onclick="resetScanner()">CANCEL</button>
+    </div>
+  </div>
+
+  <!-- MANUAL ENTRY -->
+  <div class="manual-box">
+    <input type="text" id="manual-isbn" class="manual-input" placeholder="Or enter ISBN here..." />
+    <button class="btn-manual" onclick="manualLookup()">Search / Go</button>
+  </div>
+
+  <script>
+    // PASTE YOUR REAL GOOGLE APPS SCRIPT WEB APP URL HERE:
+    var API_URL = "https://script.google.com/macros/s/AKfycbzK946kLq7uIwt3d1NNzXqrIbZTFBy9SzfjEXXPSLFRFrutD8N22fT71TEPvGrrNVdr/exec";
+
+    var currentBook = null;
+    var html5QrCode = null;
+    var isScanning = false;
+
+    function startLiveScanner() {
+      if (isScanning) return;
+      document.getElementById("status").innerText = "Point camera at barcode...";
+
+      if (!html5QrCode) {
+        html5QrCode = new Html5Qrcode("reader");
+      }
+
+      html5QrCode.start(
+        { facingMode: "environment" },
+        { fps: 15, qrbox: { width: 280, height: 150 }, aspectRatio: 1.0 },
+        onScanSuccess
+      ).then(() => {
+        isScanning = true;
+      }).catch(err => {
+        document.getElementById("status").innerHTML = 
+          "<span style='color:#dc2626;'>Please allow camera permissions!</span>";
+      });
+    }
+
+    // INSTANT LIVE CAPTURE (NO PHOTO CLICKING NEEDED)
+    function onScanSuccess(decodedText) {
+      if (!isScanning) return;
+      isScanning = false;
+
+      html5QrCode.stop().then(() => {
+        document.getElementById("reader-wrapper").style.display = "none";
+        processIsbn(decodedText);
+      }).catch(() => {
+        processIsbn(decodedText);
+      });
+    }
+
+    function manualLookup() {
+      var val = document.getElementById("manual-isbn").value.trim();
+      if (val) {
+        if (isScanning && html5QrCode) {
+          html5QrCode.stop().then(() => {
+            document.getElementById("reader-wrapper").style.display = "none";
+            isScanning = false;
+            processIsbn(val);
+          });
+        } else {
+          processIsbn(val);
+        }
+      }
+    }
+
+    function processIsbn(isbn) {
+      document.getElementById("status").innerText = "Looking up: " + isbn + "...";
+
+      fetch(API_URL + "?action=lookup&isbn=" + encodeURIComponent(isbn))
+        .then(res => res.json())
+        .then(book => showBookCard(book))
+        .catch(err => showError(err));
+    }
+
+    function showBookCard(book) {
+      currentBook = book;
+      document.getElementById("status").innerText = "";
+      document.getElementById("book-title").innerText = book.title;
+      document.getElementById("book-author").innerText = book.author;
+      document.getElementById("book-cover").src = book.coverUrl || "https://placehold.co/100x145/e2e8f0/475569?text=No+Cover";
+      
+      var stockBadge = document.getElementById("book-stock");
+      if (book.qty > 0) {
+        stockBadge.className = "badge badge-in-stock";
+        stockBadge.innerText = "In Stock: " + book.qty + " copy(s)";
+      } else {
+        stockBadge.className = "badge";
+        stockBadge.innerText = "New (Not on shelf)";
+      }
+
+      document.getElementById("card").style.display = "block";
+    }
+
+    function handleAdd() {
+      document.getElementById("status").innerText = "Adding to shelf...";
+      document.getElementById("card").style.display = "none";
+
+      var params = new URLSearchParams({
+        action: "add",
+        isbn: currentBook.isbn,
+        title: currentBook.title,
+        author: currentBook.author,
+        genre: currentBook.genre,
+        format: currentBook.format,
+        coverUrl: currentBook.coverUrl
+      });
+
+      fetch(API_URL + "?" + params.toString())
+        .then(res => res.json())
+        .then(res => actionComplete(res.message))
+        .catch(err => showError(err));
+    }
+
+    function handleSell() {
+      document.getElementById("status").innerText = "Selling copy...";
+      document.getElementById("card").style.display = "none";
+
+      fetch(API_URL + "?action=sell&isbn=" + encodeURIComponent(currentBook.isbn))
+        .then(res => res.json())
+        .then(res => actionComplete(res.message))
+        .catch(err => showError(err));
+    }
+
+    function showToast(msg, isError) {
+      var toast = document.getElementById("toast");
+      toast.innerText = msg;
+      toast.className = isError ? "toast-error" : "toast-success";
+      toast.style.display = "block";
+      setTimeout(function() { toast.style.display = "none"; }, 3000);
+    }
+
+    function actionComplete(msg) {
+      showToast("✅ " + msg, false);
+      resetScanner();
+    }
+
+    function resetScanner() {
+      document.getElementById("card").style.display = "none";
+      document.getElementById("manual-isbn").value = "";
+      document.getElementById("reader-wrapper").style.display = "block";
+      document.getElementById("status").innerText = "Point camera at barcode...";
+      startLiveScanner();
+    }
+
+    function showError(err) {
+      showToast("❌ " + (err.message || err), true);
+      resetScanner();
+    }
+
+    window.onload = function() {
+      startLiveScanner();
+    };
+  </script>
+</body>
+</html>
