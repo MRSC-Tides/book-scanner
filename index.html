@@ -1,239 +1,657 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <script src="https://unpkg.com/html5-qrcode"></script>
-  <style>
-    * { box-sizing: border-box; }
-    html, body { 
-      width: 100%; margin: 0; padding: 16px 12px; 
-      background: #f1f5f9; 
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-      text-align: center; 
-    }
-    h2 { margin: 8px 0 16px; color: #0f172a; font-size: 26px; }
-    
-    /* LIVE VIEWFINDER */
-    #reader-wrapper {
-      width: 100%; max-width: 360px; margin: 0 auto; 
-      border-radius: 12px; overflow: hidden; 
-      box-shadow: 0 4px 14px rgba(0,0,0,0.15); 
-      background: #000;
-    }
-    #reader { width: 100%; }
+import customtkinter as ctk
+from supabase import create_client, Client
+import requests
+from PIL import Image
+from io import BytesIO
+import datetime
+import tkinter as tk
 
-    #status { margin: 16px 0; font-size: 19px; font-weight: bold; color: #334155; min-height: 26px; }
+# --- CONFIGURATION ---
+SUPABASE_URL = "https://csuvgixjynuehrpiqniu.supabase.co"
+SUPABASE_KEY = "sb_publishable_MZiDRUbD-0LjxpBWZAQsww_BsXnTDmC"
+SHOP_ID = "Boy Scout Hut"  # Unique ID for this specific charity shop
 
-    /* PREVIEW CARD */
-    #card { 
-      display: none; background: white; border-radius: 14px; 
-      padding: 18px; margin: 20px 0; width: 100%; 
-      box-shadow: 0 6px 18px rgba(0,0,0,0.12); text-align: left; 
-    }
-    .cover-img { width: 100px; height: 145px; object-fit: cover; border-radius: 8px; float: left; margin-right: 16px; background: #e2e8f0; }
-    .title { font-size: 21px; font-weight: bold; color: #0f172a; margin: 0 0 6px 0; line-height: 1.25; }
-    .author { font-size: 18px; color: #64748b; margin: 0 0 10px 0; }
-    .badge { display: inline-block; padding: 6px 12px; border-radius: 6px; font-size: 16px; font-weight: bold; background: #e2e8f0; color: #334155; }
-    .badge-in-stock { background: #dcfce7; color: #15803d; }
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CharityBookTerminal/1.0"
+}
 
-    /* BUTTONS */
-    .btn-group { display: flex; gap: 8px; margin-top: 22px; clear: both; }
-    .btn-group button { flex: 1; padding: 18px 4px; border: none; border-radius: 10px; font-size: 19px; font-weight: bold; cursor: pointer; }
-    .btn-add { background: #16a34a; color: white; }
-    .btn-sell { background: #dc2626; color: white; }
-    .btn-cancel { background: #94a3b8; color: white; }
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    /* MANUAL ENTRY */
-    .manual-box { margin-top: 26px; display: flex; flex-direction: column; gap: 12px; width: 100%; }
-    .manual-input { width: 100%; padding: 16px; border: 2px solid #cbd5e1; border-radius: 10px; font-size: 21px; text-align: center; background: white; }
-    .btn-manual { width: 100%; background: #475569; color: white; padding: 16px; border: none; border-radius: 10px; font-size: 21px; font-weight: bold; cursor: pointer; }
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
 
-    /* TOAST */
-    #toast {
-      display: none; position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
-      padding: 16px 20px; border-radius: 10px; font-size: 19px; font-weight: bold; color: white;
-      box-shadow: 0 6px 20px rgba(0,0,0,0.25); z-index: 9999; width: 92%;
-    }
-    .toast-success { background: #16a34a; }
-    .toast-error { background: #dc2626; }
-  </style>
-</head>
-<body>
 
-  <div id="toast"></div>
+# =======================================================
+# LARGER FLOATING HOVER TOOLTIP COMPONENT
+# =======================================================
+class ToolTip:
+    def __init__(self, widget, text, delay=450):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.tip_window = None
+        self.timer_id = None
 
-  <h2>📚 Charity Book Scanner</h2>
+        self.widget.bind("<Enter>", self.schedule_tip)
+        self.widget.bind("<Leave>", self.hide_tip)
+        self.widget.bind("<Button-1>", self.hide_tip)
 
-  <!-- LIVE CAMERA VIEWFINDER -->
-  <div id="reader-wrapper">
-    <div id="reader"></div>
-  </div>
+    def schedule_tip(self, event=None):
+        self.cancel_timer()
+        self.timer_id = self.widget.after(self.delay, self.show_tip)
 
-  <div id="status">Starting camera...</div>
+    def cancel_timer(self):
+        if self.timer_id:
+            self.widget.after_cancel(self.timer_id)
+            self.timer_id = None
 
-  <!-- BOOK PREVIEW CARD -->
-  <div id="card">
-    <img id="book-cover" class="cover-img" src="" onerror="this.onerror=null; this.src='https://placehold.co/100x145/e2e8f0/475569?text=No+Cover';" />
-    <div class="title" id="book-title">-</div>
-    <div class="author" id="book-author">-</div>
-    <div id="book-stock" class="badge">Stock: 0</div>
+    def show_tip(self):
+        if self.tip_window or not self.text:
+            return
 
-    <div class="btn-group">
-      <button class="btn-add" onclick="handleAdd()">+ ADD</button>
-      <button class="btn-sell" onclick="handleSell()">- SELL</button>
-      <button class="btn-cancel" onclick="resetScanner()">CANCEL</button>
-    </div>
-  </div>
+        x = self.widget.winfo_rootx() + 15
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
 
-  <!-- MANUAL ENTRY -->
-  <div class="manual-box">
-    <input type="text" id="manual-isbn" class="manual-input" placeholder="Or enter ISBN here..." />
-    <button class="btn-manual" onclick="manualLookup()">Search / Go</button>
-  </div>
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tw.attributes("-topmost", True)
 
-  <script>
-    // PASTE YOUR REAL GOOGLE APPS SCRIPT WEB APP URL HERE:
-    var API_URL = "https://script.google.com/macros/s/AKfycbxTztSHG1BlXfvIB-UMng3dGqsLW_OxvEPRprIUKJdE04aSw99GhM1oyboWIfhdaGs/exec";
+        label = tk.Label(
+            tw, 
+            text=self.text, 
+            justify=tk.LEFT,
+            background="#0f172a", 
+            foreground="#f8fafc",
+            relief=tk.SOLID, 
+            borderwidth=1,
+            font=("Arial", 13, "bold"),
+            padx=16, 
+            pady=10,
+            wraplength=460
+        )
+        label.pack()
 
-    var currentBook = null;
-    var html5QrCode = null;
-    var isScanning = false;
+    def hide_tip(self, event=None):
+        self.cancel_timer()
+        if self.tip_window:
+            self.tip_window.destroy()
+            self.tip_window = None
 
-    function startLiveScanner() {
-      if (isScanning) return;
-      document.getElementById("status").innerText = "Point camera at barcode...";
 
-      if (!html5QrCode) {
-        html5QrCode = new Html5Qrcode("reader");
-      }
+# =======================================================
+# MAIN CHARITY BOOK TERMINAL
+# =======================================================
+class CharityBookApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
 
-      html5QrCode.start(
-        { facingMode: "environment" },
-        { fps: 15, qrbox: { width: 280, height: 150 }, aspectRatio: 1.0 },
-        onScanSuccess
-      ).then(() => {
-        isScanning = true;
-      }).catch(err => {
-        document.getElementById("status").innerHTML = 
-          "<span style='color:#dc2626;'>Please allow camera permissions!</span>";
-      });
-    }
+        self.title(f"Charity Book Terminal - [{SHOP_ID}]")
+        self.geometry("950x700")
+        self.current_book = None
+        self.is_manual_mode = False
 
-    // INSTANT LIVE CAPTURE (NO PHOTO CLICKING NEEDED)
-    function onScanSuccess(decodedText) {
-      if (!isScanning) return;
-      isScanning = false;
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-      html5QrCode.stop().then(() => {
-        document.getElementById("reader-wrapper").style.display = "none";
-        processIsbn(decodedText);
-      }).catch(() => {
-        processIsbn(decodedText);
-      });
-    }
+        # PREVENT PYIMAGE MEMORY CRASH:
+        placeholder_pil = Image.new("RGB", (110, 150), color="#1e293b")
+        self.placeholder_img = ctk.CTkImage(placeholder_pil, size=(110, 150))
+        self.active_cover = self.placeholder_img
 
-    function manualLookup() {
-      var val = document.getElementById("manual-isbn").value.trim();
-      if (val) {
-        if (isScanning && html5QrCode) {
-          html5QrCode.stop().then(() => {
-            document.getElementById("reader-wrapper").style.display = "none";
-            isScanning = false;
-            processIsbn(val);
-          });
-        } else {
-          processIsbn(val);
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=2)
+        self.grid_rowconfigure(0, weight=1)
+
+        # ==========================================
+        # LEFT PANEL: SCANNER & PREVIEW
+        # ==========================================
+        self.left_frame = ctk.CTkFrame(self, corner_radius=10)
+        self.left_frame.grid(row=0, column=0, padx=15, pady=15, sticky="nsew")
+
+        self.lbl_title = ctk.CTkLabel(self.left_frame, text="📚 Scanner Terminal", font=("Arial", 22, "bold"))
+        self.lbl_title.pack(pady=(10, 4))
+
+        # ISBN Input Box
+        self.entry_isbn = ctk.CTkEntry(self.left_frame, placeholder_text="Scan barcode or press Enter for No ISBN...", width=280, height=40, font=("Arial", 14))
+        self.entry_isbn.pack(pady=4)
+        self.entry_isbn.bind("<Return>", self.on_barcode_scanned)
+        self.entry_isbn.focus()
+
+        # Cover Thumbnail Label
+        self.lbl_cover = ctk.CTkLabel(self.left_frame, image=self.placeholder_img, text="No Book Loaded", compound="center", font=("Arial", 11, "bold"))
+        self.lbl_cover.pack(pady=4)
+
+        # --- CONTAINER 1: STANDARD DETAILS DISPLAY ---
+        self.frame_details = ctk.CTkFrame(self.left_frame, fg_color="transparent")
+        self.frame_details.pack(fill="x", padx=10, pady=2)
+
+        self.lbl_book_title = ctk.CTkLabel(self.frame_details, text="Title: -", font=("Arial", 16, "bold"), wraplength=260)
+        self.lbl_book_title.pack(pady=1)
+
+        self.lbl_book_author = ctk.CTkLabel(self.frame_details, text="Author: -", font=("Arial", 14), text_color="gray", wraplength=260)
+        self.lbl_book_author.pack(pady=1)
+
+        self.lbl_book_stock = ctk.CTkLabel(self.frame_details, text="Current Stock: -", font=("Arial", 15, "bold"), text_color="#10b981")
+        self.lbl_book_stock.pack(pady=3)
+
+        # --- CONTAINER 2: COMPACT SIDE-BY-SIDE MANUAL ENTRY ---
+        self.frame_manual = ctk.CTkFrame(self.left_frame, fg_color="transparent")
+
+        self.lbl_manual_notice = ctk.CTkLabel(
+            self.frame_manual, text="⚠️ Not found online. Enter details:",
+            font=("Arial", 12, "bold"), text_color="#f59e0b"
+        )
+        self.lbl_manual_notice.grid(row=0, column=0, columnspan=2, pady=(2, 6))
+
+        # Row 1: Title
+        ctk.CTkLabel(self.frame_manual, text="Title:", font=("Arial", 12, "bold"), width=55, anchor="e").grid(row=1, column=0, padx=(4, 6), pady=3, sticky="e")
+        self.entry_manual_title = ctk.CTkEntry(self.frame_manual, placeholder_text="Enter Book Title...", width=210, height=32)
+        self.entry_manual_title.grid(row=1, column=1, pady=3, sticky="w")
+
+        # Row 2: Author
+        ctk.CTkLabel(self.frame_manual, text="Author:", font=("Arial", 12, "bold"), width=55, anchor="e").grid(row=2, column=0, padx=(4, 6), pady=3, sticky="e")
+        self.entry_manual_author = ctk.CTkEntry(self.frame_manual, placeholder_text="Enter Author...", width=210, height=32)
+        self.entry_manual_author.grid(row=2, column=1, pady=3, sticky="w")
+
+        # Row 3: Genre
+        ctk.CTkLabel(self.frame_manual, text="Genre:", font=("Arial", 12, "bold"), width=55, anchor="e").grid(row=3, column=0, padx=(4, 6), pady=3, sticky="e")
+        self.entry_manual_genre = ctk.CTkEntry(self.frame_manual, placeholder_text="Enter Genre...", width=210, height=32)
+        self.entry_manual_genre.grid(row=3, column=1, pady=3, sticky="w")
+
+        # ACTION BUTTONS (Start flat grey)
+        self.btn_add = ctk.CTkButton(
+            self.left_frame, text="+ ADD TO SHELF", fg_color="#2d2d2d", text_color="#666666",
+            height=40, font=("Arial", 15, "bold"), state="disabled", command=self.action_add
+        )
+        self.btn_add.pack(fill="x", padx=20, pady=4)
+
+        self.btn_sell = ctk.CTkButton(
+            self.left_frame, text="- SELL COPY", fg_color="#2d2d2d", text_color="#666666",
+            height=40, font=("Arial", 15, "bold"), state="disabled", command=self.action_sell
+        )
+        self.btn_sell.pack(fill="x", padx=20, pady=4)
+
+        self.btn_cancel = ctk.CTkButton(
+            self.left_frame, text="CANCEL", fg_color="#2d2d2d", text_color="#666666",
+            height=34, font=("Arial", 14, "bold"), state="disabled", command=self.action_cancel
+        )
+        self.btn_cancel.pack(fill="x", padx=20, pady=4)
+
+        self.status_bar = ctk.CTkLabel(self.left_frame, text="Ready for scan (or phone scan)...", font=("Arial", 12))
+        self.status_bar.pack(side="bottom", pady=6)
+
+        # ==========================================
+        # RIGHT PANEL: INVENTORY TABLE
+        # ==========================================
+        self.right_frame = ctk.CTkFrame(self, corner_radius=10)
+        self.right_frame.grid(row=0, column=1, padx=15, pady=15, sticky="nsew")
+
+        self.lbl_inv = ctk.CTkLabel(self.right_frame, text="Shop Inventory Database", font=("Arial", 20, "bold"))
+        self.lbl_inv.pack(pady=(15, 10))
+
+        # Search Bar
+        self.entry_search = ctk.CTkEntry(self.right_frame, placeholder_text="Search inventory by title, author, genre, or barcode...", width=440, height=35)
+        self.entry_search.pack(pady=5)
+        self.entry_search.bind("<KeyRelease>", self.filter_inventory)
+
+        # --- TABLE COLUMN HEADERS ---
+        self.header_frame = ctk.CTkFrame(self.right_frame, height=32, fg_color="#1e293b", corner_radius=6)
+        self.header_frame.pack(fill="x", padx=15, pady=(8, 2))
+
+        ctk.CTkLabel(self.header_frame, text="Title", width=190, font=("Arial", 12, "bold"), text_color="#cbd5e1", anchor="w").grid(row=0, column=0, padx=(10, 4), pady=4)
+        ctk.CTkLabel(self.header_frame, text="Author", width=140, font=("Arial", 12, "bold"), text_color="#cbd5e1", anchor="w").grid(row=0, column=1, padx=4, pady=4)
+        ctk.CTkLabel(self.header_frame, text="Genre", width=100, font=("Arial", 12, "bold"), text_color="#cbd5e1", anchor="w").grid(row=0, column=2, padx=4, pady=4)
+        ctk.CTkLabel(self.header_frame, text="Qty", width=50, font=("Arial", 12, "bold"), text_color="#cbd5e1", anchor="center").grid(row=0, column=3, padx=4, pady=4)
+
+        # Scrollable Frame for Table Rows
+        self.scroll_list = ctk.CTkScrollableFrame(self.right_frame, width=520, height=450)
+        self.scroll_list.pack(fill="both", expand=True, padx=15, pady=(0, 10))
+
+        self.load_inventory()
+
+        # START CLOUD RELAY LISTENER (Checks for phone scans every 600ms)
+        self.after(1000, self.check_scan_queue)
+
+    # --- CLOUD RELAY: CHECKS PHONE SCANS IN REAL TIME ---
+    def check_scan_queue(self):
+        try:
+            # Check if phone sent any scans
+            res = supabase.table("scan_queue").select("id, isbn").eq("shop_id", SHOP_ID).order("created_at", desc=False).limit(1).execute()
+            if res.data and len(res.data) > 0:
+                item = res.data[0]
+                # Delete from queue immediately so it only processes once
+                supabase.table("scan_queue").delete().eq("id", item["id"]).execute()
+                remote_isbn = item["isbn"]
+                print(f"\n[PHONE RELAY] Received scan from phone: {remote_isbn}")
+
+                # Populate box and trigger lookup automatically!
+                self.entry_isbn.delete(0, 'end')
+                self.entry_isbn.insert(0, remote_isbn)
+                self.on_barcode_scanned()
+        except Exception:
+            pass
+        finally:
+            # Keep listening every 600ms
+            self.after(600, self.check_scan_queue)
+
+    # --- RESET PANEL HELPER ---
+    def reset_panel(self):
+        self.current_book = None
+        self.is_manual_mode = False
+
+        self.frame_manual.pack_forget()
+        self.frame_details.pack(fill="x", padx=10, pady=2)
+        self.lbl_manual_notice.configure(text="⚠️ Not found online. Enter details:")
+
+        self.entry_manual_title.delete(0, 'end')
+        self.entry_manual_author.delete(0, 'end')
+        self.entry_manual_genre.delete(0, 'end')
+
+        self.lbl_book_title.configure(text="Title: -")
+        self.lbl_book_author.configure(text="Author: -")
+        self.lbl_book_stock.configure(text="Current Stock: -")
+        
+        self.active_cover = self.placeholder_img
+        self.lbl_cover.configure(image=self.placeholder_img, text="No Book Loaded")
+        
+        self.btn_add.configure(state="disabled", fg_color="#2d2d2d", text_color="#666666")
+        self.btn_sell.configure(state="disabled", fg_color="#2d2d2d", text_color="#666666")
+        self.btn_cancel.configure(state="disabled", fg_color="#2d2d2d", text_color="#666666")
+
+        self.entry_isbn.delete(0, 'end')
+        self.entry_isbn.focus()
+
+    # --- MANUAL ENTRY FOR NON-ISBN BOOKS ---
+    def start_manual_no_isbn(self):
+        print("-> Blank scan: Starting manual entry for book without ISBN.")
+        self.is_manual_mode = True
+
+        generated_id = f"NOISBN-{int(datetime.datetime.now().timestamp())}"
+        self.current_book = {
+            "shop_id": SHOP_ID,
+            "isbn": generated_id,
+            "title": "",
+            "author": "",
+            "genre": "General",
+            "format": "Physical Edition",
+            "cover": "",
+            "qty": 0
         }
-      }
-    }
 
-    function processIsbn(isbn) {
-      document.getElementById("status").innerText = "Looking up: " + isbn + "...";
+        self.frame_details.pack_forget()
+        self.frame_manual.pack(fill="x", padx=10, pady=2)
+        self.lbl_manual_notice.configure(text="📖 No ISBN Book: Enter details manually:")
 
-      fetch(API_URL + "?action=lookup&isbn=" + encodeURIComponent(isbn))
-        .then(res => res.json())
-        .then(book => showBookCard(book))
-        .catch(err => showError(err));
-    }
+        self.entry_manual_title.delete(0, 'end')
+        self.entry_manual_author.delete(0, 'end')
+        self.entry_manual_genre.delete(0, 'end')
+        self.entry_manual_genre.insert(0, "General")
 
-    function showBookCard(book) {
-      currentBook = book;
-      document.getElementById("status").innerText = "";
-      document.getElementById("book-title").innerText = book.title;
-      document.getElementById("book-author").innerText = book.author;
-      document.getElementById("book-cover").src = book.coverUrl || "https://placehold.co/100x145/e2e8f0/475569?text=No+Cover";
-      
-      var stockBadge = document.getElementById("book-stock");
-      if (book.qty > 0) {
-        stockBadge.className = "badge badge-in-stock";
-        stockBadge.innerText = "In Stock: " + book.qty + " copy(s)";
-      } else {
-        stockBadge.className = "badge";
-        stockBadge.innerText = "New (Not on shelf)";
-      }
+        self.entry_manual_title.focus()
+        self.display_book("", "", 0, "")
 
-      document.getElementById("card").style.display = "block";
-    }
+        self.btn_add.configure(state="normal", fg_color="#16a34a", hover_color="#15803d", text_color="#ffffff")
+        self.btn_sell.configure(state="disabled", fg_color="#2d2d2d", text_color="#666666")
+        self.btn_cancel.configure(state="normal", fg_color="#64748b", hover_color="#475569", text_color="#ffffff")
+        self.status_bar.configure(text="No ISBN: Type Title, Author, and Genre, then click Add.")
 
-    function handleAdd() {
-      document.getElementById("status").innerText = "Adding to shelf...";
-      document.getElementById("card").style.display = "none";
+    # --- LOOKUP LOGIC ---
+    def on_barcode_scanned(self, event=None):
+        raw_input = self.entry_isbn.get().strip()
 
-      var params = new URLSearchParams({
-        action: "add",
-        isbn: currentBook.isbn,
-        title: currentBook.title,
-        author: currentBook.author,
-        genre: currentBook.genre,
-        format: currentBook.format,
-        coverUrl: currentBook.coverUrl
-      });
+        # COPY TO CLIPBOARD
+        if raw_input:
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(raw_input)
+                self.update()
+            except Exception:
+                pass
 
-      fetch(API_URL + "?" + params.toString())
-        .then(res => res.json())
-        .then(res => actionComplete(res.message))
-        .catch(err => showError(err));
-    }
+        isbn = raw_input.replace("-", "").replace(" ", "")
+        
+        if not isbn:
+            self.start_manual_no_isbn()
+            return
 
-    function handleSell() {
-      document.getElementById("status").innerText = "Selling copy...";
-      document.getElementById("card").style.display = "none";
+        if len(isbn) == 9:
+            isbn = "0" + isbn
 
-      fetch(API_URL + "?action=sell&isbn=" + encodeURIComponent(currentBook.isbn))
-        .then(res => res.json())
-        .then(res => actionComplete(res.message))
-        .catch(err => showError(err));
-    }
+        print(f"\n[SCAN EVENT] Input: {isbn}")
+        self.status_bar.configure(text=f"Looking up ISBN {isbn}...")
+        self.update_idletasks()
 
-    function showToast(msg, isError) {
-      var toast = document.getElementById("toast");
-      toast.innerText = msg;
-      toast.className = isError ? "toast-error" : "toast-success";
-      toast.style.display = "block";
-      setTimeout(function() { toast.style.display = "none"; }, 3000);
-    }
+        res = None
+        try:
+            res = supabase.table("inventory").select("*").eq("shop_id", SHOP_ID).eq("isbn", isbn).execute()
+        except Exception as e:
+            print(f"Supabase connection error: {e}")
 
-    function actionComplete(msg) {
-      showToast("✅ " + msg, false);
-      resetScanner();
-    }
+        if res and res.data and len(res.data) > 0 and res.data[0]["title"] != "Unknown Title":
+            book = res.data[0]
+            print(f"-> Loaded from Supabase database: {book['title']}")
+            self.current_book = book
+            self.is_manual_mode = False
+            self.frame_manual.pack_forget()
+            self.frame_details.pack(fill="x", padx=10, pady=2)
+            self.display_book(book["title"], book["author"], book["qty"], book.get("cover"))
+            
+            self.btn_add.configure(state="normal", fg_color="#16a34a", hover_color="#15803d", text_color="#ffffff")
+            self.btn_sell.configure(state="normal", fg_color="#dc2626", hover_color="#b91c1c", text_color="#ffffff")
+            self.btn_cancel.configure(state="normal", fg_color="#64748b", hover_color="#475569", text_color="#ffffff")
 
-    function resetScanner() {
-      document.getElementById("card").style.display = "none";
-      document.getElementById("manual-isbn").value = "";
-      document.getElementById("reader-wrapper").style.display = "block";
-      document.getElementById("status").innerText = "Point camera at barcode...";
-      startLiveScanner();
-    }
+        else:
+            print("-> Fetching from External APIs...")
+            book_meta = self.fetch_metadata(isbn)
+            self.current_book = book_meta
+            current_qty = res.data[0]["qty"] if (res and res.data and len(res.data) > 0) else 0
 
-    function showError(err) {
-      showToast("❌ " + (err.message || err), true);
-      resetScanner();
-    }
+            if book_meta["title"] == "Unknown Title":
+                print("-> Book not found online. Switching to Manual Entry Mode.")
+                self.is_manual_mode = True
+                
+                self.frame_details.pack_forget()
+                self.frame_manual.pack(fill="x", padx=10, pady=2)
+                self.lbl_manual_notice.configure(text="⚠️ Not found online. Enter details:")
+                
+                self.entry_manual_title.delete(0, 'end')
+                self.entry_manual_author.delete(0, 'end')
+                if book_meta["author"] != "Unknown Author":
+                    self.entry_manual_author.insert(0, book_meta["author"])
+                self.entry_manual_genre.delete(0, 'end')
+                self.entry_manual_genre.insert(0, "General")
 
-    window.onload = function() {
-      startLiveScanner();
-    };
-  </script>
-</body>
-</html>
+                self.entry_manual_title.focus()
+                self.display_book("", "", current_qty, book_meta["cover"])
+
+                self.btn_add.configure(state="normal", fg_color="#16a34a", hover_color="#15803d", text_color="#ffffff")
+                self.btn_sell.configure(state="disabled", fg_color="#2d2d2d", text_color="#666666")
+                self.btn_cancel.configure(state="normal", fg_color="#64748b", hover_color="#475569", text_color="#ffffff")
+                self.status_bar.configure(text="Book not in database. Please enter title & author.")
+
+            else:
+                self.is_manual_mode = False
+                self.frame_manual.pack_forget()
+                self.frame_details.pack(fill="x", padx=10, pady=2)
+                self.display_book(book_meta["title"], book_meta["author"], current_qty, book_meta["cover"])
+
+                self.btn_add.configure(state="normal", fg_color="#16a34a", hover_color="#15803d", text_color="#ffffff")
+                self.btn_sell.configure(state="normal", fg_color="#dc2626", hover_color="#b91c1c", text_color="#ffffff")
+                self.btn_cancel.configure(state="normal", fg_color="#64748b", hover_color="#475569", text_color="#ffffff")
+
+    def display_book(self, title, author, qty, cover_url):
+        self.lbl_book_title.configure(text=f"Title: {title}")
+        self.lbl_book_author.configure(text=f"Author: {author}")
+        self.lbl_book_stock.configure(text=f"Current Stock: {qty} copy(s)")
+
+        if cover_url:
+            try:
+                resp = requests.get(cover_url, headers=HEADERS, timeout=4)
+                if resp.status_code == 200:
+                    img = Image.open(BytesIO(resp.content))
+                    self.active_cover = ctk.CTkImage(img, size=(110, 150))
+                    self.lbl_cover.configure(image=self.active_cover, text="")
+                    return
+            except Exception as e:
+                print(f"Image load error: {e}")
+
+        self.active_cover = self.placeholder_img
+        self.lbl_cover.configure(image=self.placeholder_img, text="No Cover Art")
+
+    # --- CLICK-TO-INSPECT (FROM TABLE) ---
+    def select_book_from_list(self, book_data):
+        self.current_book = book_data
+        self.is_manual_mode = False
+        self.frame_manual.pack_forget()
+        self.frame_details.pack(fill="x", padx=10, pady=2)
+        
+        self.display_book(book_data["title"], book_data["author"], book_data["qty"], book_data.get("cover"))
+        
+        self.btn_add.configure(state="normal", fg_color="#16a34a", hover_color="#15803d", text_color="#ffffff")
+        self.btn_sell.configure(state="normal", fg_color="#dc2626", hover_color="#b91c1c", text_color="#ffffff")
+        self.btn_cancel.configure(state="normal", fg_color="#64748b", hover_color="#475569", text_color="#ffffff")
+        self.status_bar.configure(text=f"Selected: {book_data['title']}")
+
+    # --- ACTIONS: ADD, SELL & CANCEL ---
+    def action_add(self):
+        if not self.current_book:
+            return
+        
+        if self.is_manual_mode:
+            manual_title = self.entry_manual_title.get().strip()
+            manual_author = self.entry_manual_author.get().strip()
+            manual_genre = self.entry_manual_genre.get().strip()
+
+            if not manual_title:
+                self.status_bar.configure(text="⚠️ Please enter at least a Book Title!")
+                self.entry_manual_title.focus()
+                return
+
+            self.current_book["title"] = manual_title
+            self.current_book["author"] = manual_author if manual_author else "Unknown Author"
+            self.current_book["genre"] = manual_genre if manual_genre else "General"
+
+        isbn = self.current_book["isbn"]
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        res = supabase.table("inventory").select("*").eq("shop_id", SHOP_ID).eq("isbn", isbn).execute()
+
+        if res.data and len(res.data) > 0:
+            new_qty = res.data[0]["qty"] + 1
+            update_data = {
+                "qty": new_qty, 
+                "title": self.current_book["title"],
+                "author": self.current_book["author"],
+                "genre": self.current_book["genre"],
+                "updated_at": now
+            }
+            supabase.table("inventory").update(update_data).eq("shop_id", SHOP_ID).eq("isbn", isbn).execute()
+            self.status_bar.configure(text=f"✅ Added copy! Qty is now {new_qty}")
+        else:
+            self.current_book["qty"] = 1
+            self.current_book["updated_at"] = now
+            supabase.table("inventory").insert(self.current_book).execute()
+            self.status_bar.configure(text="✅ Added new book to shelf!")
+
+        self.load_inventory()
+        self.reset_panel()
+
+    def action_sell(self):
+        if not self.current_book or self.is_manual_mode:
+            return
+        
+        isbn = self.current_book["isbn"]
+        res = supabase.table("inventory").select("*").eq("shop_id", SHOP_ID).eq("isbn", isbn).execute()
+
+        if res.data and len(res.data) > 0:
+            current_qty = res.data[0]["qty"]
+            if current_qty > 1:
+                now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                new_qty = current_qty - 1
+                supabase.table("inventory").update({"qty": new_qty, "updated_at": now}).eq("shop_id", SHOP_ID).eq("isbn", isbn).execute()
+                self.status_bar.configure(text=f"✅ Sold! Remaining: {new_qty}")
+            else:
+                supabase.table("inventory").delete().eq("shop_id", SHOP_ID).eq("isbn", isbn).execute()
+                self.status_bar.configure(text="✅ Last copy sold! Removed from inventory.")
+        else:
+            self.status_bar.configure(text="❌ Book is not in stock!")
+
+        self.load_inventory()
+        self.reset_panel()
+
+    def action_cancel(self):
+        self.status_bar.configure(text="Cancelled scan.")
+        self.reset_panel()
+
+    # --- INVENTORY VIEWER ---
+    def load_inventory(self, filter_text=""):
+        for widget in self.scroll_list.winfo_children():
+            widget.destroy()
+
+        try:
+            query = supabase.table("inventory").select("title, author, genre, qty, isbn, cover").eq("shop_id", SHOP_ID)
+            
+            if filter_text:
+                search_pattern = f"title.ilike.%{filter_text}%,author.ilike.%{filter_text}%,genre.ilike.%{filter_text}%,isbn.ilike.%{filter_text}%"
+                query = query.or_(search_pattern)
+            
+            books = query.order("updated_at", desc=True).limit(50).execute().data
+        except Exception as e:
+            print(f"Error loading inventory: {e}")
+            books = []
+
+        for b in books:
+            row = ctk.CTkFrame(self.scroll_list, fg_color="transparent", height=28, cursor="hand2")
+            row.pack(fill="x", pady=1)
+
+            row.bind("<Button-1>", lambda e, book=b: self.select_book_from_list(book))
+
+            clean_title = b['title'][:25] + "..." if len(b['title']) > 25 else b['title']
+            clean_author = b['author'][:18] + "..." if len(b['author']) > 18 else b['author']
+            raw_genre = b.get('genre') or 'General'
+            clean_genre = raw_genre[:13] + "..." if len(raw_genre) > 13 else raw_genre
+
+            # Col 0: Title
+            lbl_title = ctk.CTkLabel(row, text=clean_title, width=190, font=("Arial", 12), text_color="#000000", anchor="w", cursor="hand2")
+            lbl_title.grid(row=0, column=0, padx=(10, 4), pady=3)
+            lbl_title.bind("<Button-1>", lambda e, book=b: self.select_book_from_list(book))
+            ToolTip(lbl_title, b['title'])
+
+            # Col 1: Author
+            lbl_author = ctk.CTkLabel(row, text=clean_author, width=140, font=("Arial", 12), text_color="#000000", anchor="w", cursor="hand2")
+            lbl_author.grid(row=0, column=1, padx=4, pady=3)
+            lbl_author.bind("<Button-1>", lambda e, book=b: self.select_book_from_list(book))
+            ToolTip(lbl_author, b['author'])
+
+            # Col 2: Genre
+            lbl_genre = ctk.CTkLabel(row, text=clean_genre, width=100, font=("Arial", 12), text_color="#000000", anchor="w", cursor="hand2")
+            lbl_genre.grid(row=0, column=2, padx=4, pady=3)
+            lbl_genre.bind("<Button-1>", lambda e, book=b: self.select_book_from_list(book))
+            ToolTip(lbl_genre, raw_genre)
+
+            # Col 3: Qty
+            lbl_qty = ctk.CTkLabel(row, text=str(b['qty']), width=50, font=("Arial", 12, "bold"), text_color="#000000", anchor="center", cursor="hand2")
+            lbl_qty.grid(row=0, column=3, padx=4, pady=3)
+            lbl_qty.bind("<Button-1>", lambda e, book=b: self.select_book_from_list(book))
+
+    def filter_inventory(self, event=None):
+        self.load_inventory(self.entry_search.get().strip())
+
+    # --- MULTI-SOURCE METADATA LOOKUP ---
+    def fetch_metadata(self, isbn):
+        print(f"\n--- [LOOKUP START: ISBN {isbn}] ---")
+        title = "Unknown Title"
+        author = "Unknown Author"
+        genre = "General"
+        format_info = "Physical Edition"
+        cover_url = ""
+
+        # 1. Google Books (Exact)
+        try:
+            url = f"https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn}"
+            resp = requests.get(url, headers=HEADERS, timeout=4)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("totalItems", 0) > 0:
+                    v = data["items"][0]["volumeInfo"]
+                    title = v.get("title", title)
+                    if "authors" in v:
+                        author = ", ".join(v["authors"])
+                    if "categories" in v and len(v["categories"]) > 0:
+                        genre = v["categories"][0].split(" / ")[0]
+                    if "pageCount" in v:
+                        format_info = f"Pages: {v['pageCount']}"
+                    if "imageLinks" in v:
+                        cover_url = v["imageLinks"].get("thumbnail", "").replace("http://", "https://")
+                    print(f"-> Google Books Exact: {title} by {author}")
+        except Exception as e:
+            print(f"Google Books exact error: {e}")
+
+        # 2. Google Books (Broad)
+        if title == "Unknown Title":
+            try:
+                url = f"https://www.googleapis.com/books/v1/volumes?q={isbn}"
+                resp = requests.get(url, headers=HEADERS, timeout=4)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("totalItems", 0) > 0:
+                        v = data["items"][0]["volumeInfo"]
+                        title = v.get("title", title)
+                        if "authors" in v:
+                            author = ", ".join(v["authors"])
+                        if "categories" in v:
+                            genre = v["categories"][0].split(" / ")[0]
+                        if "imageLinks" in v and not cover_url:
+                            cover_url = v["imageLinks"].get("thumbnail", "").replace("http://", "https://")
+                        print(f"-> Google Books Broad: {title} by {author}")
+            except Exception as e:
+                print(f"Google Books broad error: {e}")
+
+        # 3. Open Library Search API
+        if title == "Unknown Title" or author == "Unknown Author":
+            try:
+                ol_search = f"https://openlibrary.org/search.json?isbn={isbn}"
+                resp = requests.get(ol_search, headers=HEADERS, timeout=5)
+                if resp.status_code == 200:
+                    ol_data = resp.json()
+                    if ol_data.get("numFound", 0) > 0 and len(ol_data.get("docs", [])) > 0:
+                        doc = ol_data["docs"][0]
+                        if title == "Unknown Title" and "title" in doc:
+                            title = doc["title"]
+                        if author == "Unknown Author" and "author_name" in doc:
+                            author = ", ".join(doc["author_name"])
+                        if "number_of_pages_median" in doc:
+                            format_info = f"Pages: {doc['number_of_pages_median']}"
+                        if not cover_url and "cover_i" in doc:
+                            cover_url = f"https://covers.openlibrary.org/b/id/{doc['cover_i']}-M.jpg"
+                        print(f"-> Open Library Search: {title} by {author}")
+            except Exception as e:
+                print(f"Open Library Search error: {e}")
+
+        # 4. Open Library Bibkeys
+        if title == "Unknown Title" or author == "Unknown Author":
+            try:
+                ol_url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&jscmd=data&format=json"
+                resp = requests.get(ol_url, headers=HEADERS, timeout=4)
+                if resp.status_code == 200:
+                    ol_data = resp.json()
+                    key = f"ISBN:{isbn}"
+                    if key in ol_data:
+                        b = ol_data[key]
+                        if title == "Unknown Title":
+                            title = b.get("title", title)
+                        if author == "Unknown Author" and "authors" in b:
+                            author = ", ".join([a.get("name", "") for a in b["authors"]])
+                        if not cover_url and "cover" in b:
+                            cover_url = b["cover"].get("medium", "")
+                        print(f"-> Open Library Bibkeys: {title} by {author}")
+            except Exception as e:
+                print(f"Open Library Bibkeys error: {e}")
+
+        if not cover_url:
+            cover_url = f"https://covers.openlibrary.org/b/isbn/{isbn}-M.jpg"
+
+        print(f"Final Resolved: [{title}] by [{author}]\n")
+
+        return {
+            "shop_id": SHOP_ID,
+            "isbn": isbn,
+            "title": title,
+            "author": author,
+            "genre": genre,
+            "format": format_info,
+            "cover": cover_url
+        }
+
+    # --- CLEAN SHUTDOWN HANDLER ---
+    def on_closing(self):
+        try:
+            self.withdraw()
+            self.quit()
+            self.destroy()
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    app = CharityBookApp()
+    app.mainloop()
